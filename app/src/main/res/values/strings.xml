@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">立即錄音機</string>
+    <string name="status_idle">待機中</string>
+    <string name="status_recording">錄音中…</string>
+    <string name="status_paused">已暫停</string>
+    <string name="btn_start">● 開始錄音</string>
+    <string name="btn_stop">■ 停止並儲存</string>
+    <string name="btn_pause">暫停</string>
+    <string name="btn_resume">繼續</string>
+    <string name="auto_start">開啟 App 後立即開始錄音</string>
+    <string name="list_title">錄音檔</string>
+    <string name="list_empty">還沒有錄音</string>
+    <string name="need_mic">需要麥克風權限才能錄音</string>
+    <string name="act_play">播放</string>
+    <string name="act_share">分享</string>
+    <string name="act_delete">刪除</string>
+    <string name="act_stop_short">停止</string>
+    <string name="confirm_delete">確定刪除這個錄音？</string>
+    <string name="ok">確定</string>
+    <string name="cancel">取消</string>
+    <string name="no_player">找不到可以播放的 App</string>
+    <string name="record_failed">無法開始錄音（麥克風可能被其他 App 佔用）</string>
+    <string name="notif_channel">錄音狀態</string>
+    <string name="notif_recording">錄音中</string>
+    <string name="notif_paused">已暫停</string>
+    <string name="notif_text">點一下回到 App</string>
+</resources>
