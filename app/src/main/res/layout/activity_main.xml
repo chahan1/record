@@ -2,59 +2,118 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/bg"
     android:orientation="vertical"
-    android:padding="20dp">
+    android:paddingStart="16dp"
+    android:paddingTop="12dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="8dp">
 
     <TextView
-        android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center"
-        android:text="@string/status_idle"
-        android:textSize="16sp" />
-
-    <TextView
-        android:id="@+id/tvTime"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="16dp"
-        android:fontFamily="monospace"
-        android:gravity="center"
-        android:text="00:00"
-        android:textSize="56sp"
+        android:paddingStart="4dp"
+        android:paddingBottom="12dp"
+        android:text="@string/app_name"
+        android:textColor="@color/text"
+        android:textSize="22sp"
         android:textStyle="bold" />
 
-    <Button
-        android:id="@+id/btnRecord"
-        style="@style/Widget.AppCompat.Button.Colored"
-        android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:text="@string/btn_start"
-        android:textSize="20sp" />
-
-    <Button
-        android:id="@+id/btnPause"
-        android:layout_width="match_parent"
-        android:layout_height="52dp"
-        android:layout_marginTop="8dp"
-        android:text="@string/btn_pause"
-        android:visibility="gone" />
-
-    <androidx.appcompat.widget.SwitchCompat
-        android:id="@+id/swAuto"
+    <!-- 錄音控制卡片 -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="@string/auto_start"
-        android:textSize="16sp" />
+        android:background="@drawable/bg_card"
+        android:orientation="vertical"
+        android:padding="20dp">
 
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/status_idle"
+            android:textColor="@color/text_sub"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tvTime"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:text="00:00"
+            android:textColor="@color/text"
+            android:textSize="52sp"
+            android:textStyle="bold" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/btnPause"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/bg_circle_soft"
+                android:contentDescription="@string/btn_pause"
+                android:padding="16dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_pause"
+                android:tint="@color/icon"
+                android:visibility="invisible" />
+
+            <ImageButton
+                android:id="@+id/btnRecord"
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                android:layout_marginStart="24dp"
+                android:layout_marginEnd="24dp"
+                android:background="@drawable/bg_record"
+                android:contentDescription="@string/btn_start"
+                android:padding="26dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/ic_mic"
+                android:tint="@color/white" />
+
+            <!-- 右側佔位，讓錄音鈕保持置中 -->
+            <View
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:visibility="invisible" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="8dp"
+            android:background="@color/soft" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/swAuto"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="44dp"
+            android:text="@string/auto_start"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- 錄音檔清單 -->
     <TextView
+        android:id="@+id/tvListTitle"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="20dp"
-        android:layout_marginBottom="4dp"
+        android:paddingStart="4dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="8dp"
         android:text="@string/list_title"
+        android:textColor="@color/text_sub"
         android:textSize="14sp"
         android:textStyle="bold" />
 
@@ -62,13 +121,20 @@
         android:id="@+id/tvEmpty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="12dp"
+        android:padding="16dp"
         android:text="@string/list_empty"
+        android:textColor="@color/text_sub"
         android:textSize="14sp" />
 
     <ListView
         android:id="@+id/listView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:listSelector="@android:color/transparent"
+        android:paddingBottom="12dp"
+        android:scrollbars="none" />
 </LinearLayout>

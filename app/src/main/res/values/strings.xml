@@ -10,6 +10,9 @@
     <string name="btn_resume">繼續</string>
     <string name="auto_start">開啟 App 後立即開始錄音</string>
     <string name="list_title">錄音檔</string>
+    <string name="list_title_count">錄音檔（%1$d）</string>
+    <string name="play_while_recording">錄音中無法播放</string>
+    <string name="play_failed">這個錄音檔無法播放</string>
     <string name="list_empty">還沒有錄音</string>
     <string name="need_mic">需要麥克風權限才能錄音</string>
     <string name="act_play">播放</string>

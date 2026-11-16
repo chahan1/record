@@ -3,15 +3,19 @@ package com.chahan.record
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.Button
+import android.view.ViewGroup
+import android.widget.BaseAdapter
+import android.widget.ImageButton
 import android.widget.ListView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,23 +29,29 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private data class RecItem(val file: File, val label: String)
+private data class RecItem(val file: File, val title: String, val meta: String)
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var tvTime: TextView
     private lateinit var tvEmpty: TextView
-    private lateinit var btnRecord: Button
-    private lateinit var btnPause: Button
+    private lateinit var tvListTitle: TextView
+    private lateinit var btnRecord: ImageButton
+    private lateinit var btnPause: ImageButton
     private lateinit var swAuto: SwitchCompat
     private lateinit var listView: ListView
-    private lateinit var adapter: ArrayAdapter<String>
+    private lateinit var adapter: RecAdapter
 
     private var items: List<RecItem> = emptyList()
     private val handler = Handler(Looper.getMainLooper())
     private var lastState = RecState.IDLE
     private var autoStartPending = false
+
+    // 播放狀態
+    private var player: MediaPlayer? = null
+    private var playingPath: String? = null
+    private var seeking = false
 
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -55,7 +65,8 @@ class MainActivity : AppCompatActivity() {
     private val ticker = object : Runnable {
         override fun run() {
             refreshUi()
-            handler.postDelayed(this, 500)
+            updatePlayingRow()
+            handler.postDelayed(this, 300)
         }
     }
 
@@ -66,16 +77,14 @@ class MainActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         tvTime = findViewById(R.id.tvTime)
         tvEmpty = findViewById(R.id.tvEmpty)
+        tvListTitle = findViewById(R.id.tvListTitle)
         btnRecord = findViewById(R.id.btnRecord)
         btnPause = findViewById(R.id.btnPause)
         swAuto = findViewById(R.id.swAuto)
         listView = findViewById(R.id.listView)
 
-        adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, mutableListOf<String>())
+        adapter = RecAdapter()
         listView.adapter = adapter
-        listView.setOnItemClickListener { _, _, position, _ ->
-            items.getOrNull(position)?.let { showActions(it) }
-        }
 
         swAuto.isChecked = Prefs.autoStart(this)
         swAuto.setOnCheckedChangeListener { _, checked -> Prefs.setAutoStart(this, checked) }
@@ -108,6 +117,21 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    override fun onStop() {
+        // 離開畫面時暫停播放（保留位置）
+        val mp = player
+        if (mp != null && mp.isPlaying) {
+            mp.pause()
+            adapter.notifyDataSetChanged()
+        }
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        stopPlayback()
+        super.onDestroy()
+    }
+
     // ---------------------------------------------------------------- 錄音控制
 
     private fun requestStart() {
@@ -125,6 +149,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
+        stopPlayback()
         ContextCompat.startForegroundService(
             this,
             Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_START)
@@ -140,9 +165,16 @@ class MainActivity : AppCompatActivity() {
     private fun refreshUi() {
         val s = RecorderService.state
         tvTime.text = formatTime(RecorderService.elapsedMs())
-        btnRecord.setText(if (s == RecState.IDLE) R.string.btn_start else R.string.btn_stop)
-        btnPause.visibility = if (s == RecState.IDLE) View.GONE else View.VISIBLE
-        btnPause.setText(if (s == RecState.PAUSED) R.string.btn_resume else R.string.btn_pause)
+
+        btnRecord.setImageResource(if (s == RecState.IDLE) R.drawable.ic_mic else R.drawable.ic_stop)
+        btnRecord.contentDescription =
+            getString(if (s == RecState.IDLE) R.string.btn_start else R.string.btn_stop)
+
+        btnPause.visibility = if (s == RecState.IDLE) View.INVISIBLE else View.VISIBLE
+        btnPause.setImageResource(if (s == RecState.PAUSED) R.drawable.ic_play else R.drawable.ic_pause)
+        btnPause.contentDescription =
+            getString(if (s == RecState.PAUSED) R.string.btn_resume else R.string.btn_pause)
+
         tvStatus.setText(
             when (s) {
                 RecState.IDLE -> R.string.status_idle
@@ -150,6 +182,13 @@ class MainActivity : AppCompatActivity() {
                 RecState.PAUSED -> R.string.status_paused
             }
         )
+        tvStatus.setTextColor(
+            ContextCompat.getColor(this, if (s == RecState.IDLE) R.color.text_sub else R.color.brand)
+        )
+
+        // 錄音開始時停止播放，避免聲音被錄進去
+        if (s != RecState.IDLE && player != null) stopPlayback()
+
         if (lastState != RecState.IDLE && s == RecState.IDLE) {
             handler.postDelayed({ loadFiles() }, 400)
         }
@@ -177,25 +216,26 @@ class MainActivity : AppCompatActivity() {
             val files = (dir.listFiles { f -> f.extension == "m4a" && f.absolutePath != current }
                 ?: emptyArray())
                 .sortedByDescending { it.name }
-            val built = files.map { RecItem(it, describe(it)) }
+            val built = files.map { describe(it) }
             runOnUiThread {
                 items = built
-                adapter.clear()
-                adapter.addAll(built.map { it.label })
                 adapter.notifyDataSetChanged()
                 tvEmpty.visibility = if (built.isEmpty()) View.VISIBLE else View.GONE
+                tvListTitle.text =
+                    if (built.isEmpty()) getString(R.string.list_title)
+                    else getString(R.string.list_title_count, built.size)
             }
         }.start()
     }
 
-    private fun describe(f: File): String {
+    private fun describe(f: File): RecItem {
         val start = try {
             val stamp = f.nameWithoutExtension.removePrefix("rec_")
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(stamp) ?: Date(f.lastModified())
         } catch (e: Exception) {
             Date(f.lastModified())
         }
-        val whenText = SimpleDateFormat("MM/dd HH:mm", Locale.US).format(start)
+        val title = SimpleDateFormat("MM/dd  HH:mm", Locale.US).format(start)
 
         var durText = "--:--"
         val mmr = MediaMetadataRetriever()
@@ -214,39 +254,151 @@ class MainActivity : AppCompatActivity() {
         }
 
         val sizeText = String.format(Locale.US, "%.1f MB", f.length() / 1024.0 / 1024.0)
-        return "$whenText   ·   $durText   ·   $sizeText"
+        return RecItem(f, title, "$durText  ·  $sizeText")
     }
 
-    private fun showActions(item: RecItem) {
-        val actions = arrayOf(
-            getString(R.string.act_play),
-            getString(R.string.act_share),
-            getString(R.string.act_delete)
-        )
-        AlertDialog.Builder(this)
-            .setTitle(item.file.name)
-            .setItems(actions) { _, which ->
-                when (which) {
-                    0 -> play(item.file)
-                    1 -> share(item.file)
-                    2 -> confirmDelete(item.file)
-                }
+    private inner class RecAdapter : BaseAdapter() {
+        override fun getCount(): Int = items.size
+        override fun getItem(position: Int): Any = items[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val v = convertView ?: layoutInflater.inflate(R.layout.item_recording, parent, false)
+            val item = items[position]
+            val mp = player
+            val isCurrent = mp != null && playingPath == item.file.absolutePath
+            val isPlaying = isCurrent && mp != null && mp.isPlaying
+
+            v.findViewById<TextView>(R.id.tvTitle).text = item.title
+            v.findViewById<TextView>(R.id.tvMeta).text = item.meta
+
+            val btnPlay = v.findViewById<ImageButton>(R.id.btnPlay)
+            btnPlay.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+            btnPlay.contentDescription =
+                getString(if (isPlaying) R.string.btn_pause else R.string.act_play)
+            btnPlay.setOnClickListener { togglePlay(item) }
+
+            v.findViewById<ImageButton>(R.id.btnShare).setOnClickListener { share(item.file) }
+            v.findViewById<ImageButton>(R.id.btnDelete).setOnClickListener { confirmDelete(item.file) }
+
+            val panel = v.findViewById<View>(R.id.playerPanel)
+            if (isCurrent && mp != null) {
+                panel.visibility = View.VISIBLE
+                val seek = v.findViewById<SeekBar>(R.id.seek)
+                val dur = mp.duration
+                seek.max = dur
+                seek.progress = mp.currentPosition
+                setPosText(v, mp.currentPosition, dur)
+                seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser) {
+                            player?.seekTo(progress)
+                            setPosText(v, progress, dur)
+                        }
+                    }
+
+                    override fun onStartTrackingTouch(s: SeekBar?) {
+                        seeking = true
+                    }
+
+                    override fun onStopTrackingTouch(s: SeekBar?) {
+                        seeking = false
+                    }
+                })
+            } else {
+                panel.visibility = View.GONE
             }
-            .show()
-    }
-
-    private fun uriFor(f: File) = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
-
-    private fun play(f: File) {
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uriFor(f), "audio/mp4")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        try {
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, R.string.no_player, Toast.LENGTH_LONG).show()
+            return v
         }
     }
+
+    private fun setPosText(row: View, pos: Int, dur: Int) {
+        row.findViewById<TextView>(R.id.tvPos).text =
+            "${formatTime(pos.toLong())} / ${formatTime(dur.toLong())}"
+    }
+
+    /** 每 300ms 更新正在播放那一列的進度條 */
+    private fun updatePlayingRow() {
+        val mp = player ?: return
+        val path = playingPath ?: return
+        if (seeking) return
+        val index = items.indexOfFirst { it.file.absolutePath == path }
+        if (index < 0) return
+        val child = listView.getChildAt(index - listView.firstVisiblePosition) ?: return
+        val pos = try {
+            mp.currentPosition
+        } catch (e: Exception) {
+            return
+        }
+        child.findViewById<SeekBar>(R.id.seek).progress = pos
+        setPosText(child, pos, mp.duration)
+    }
+
+    // ---------------------------------------------------------------- 播放
+
+    private fun togglePlay(item: RecItem) {
+        val path = item.file.absolutePath
+        val current = player
+        if (current != null && playingPath == path) {
+            if (current.isPlaying) current.pause() else current.start()
+            adapter.notifyDataSetChanged()
+            return
+        }
+
+        stopPlayback()
+        if (RecorderService.state != RecState.IDLE) {
+            Toast.makeText(this, R.string.play_while_recording, Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val mp = MediaPlayer()
+        try {
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            mp.setDataSource(path)
+            mp.prepare()
+            mp.setOnCompletionListener { stopPlayback() }
+            mp.start()
+            player = mp
+            playingPath = path
+        } catch (e: Exception) {
+            try {
+                mp.release()
+            } catch (ignored: Exception) {
+                // ignore
+            }
+            Toast.makeText(this, R.string.play_failed, Toast.LENGTH_SHORT).show()
+        }
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun stopPlayback() {
+        val mp = player
+        player = null
+        playingPath = null
+        seeking = false
+        if (mp != null) {
+            try {
+                mp.stop()
+            } catch (e: Exception) {
+                // ignore
+            }
+            try {
+                mp.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+            if (::adapter.isInitialized) adapter.notifyDataSetChanged()
+        }
+    }
+
+    // ---------------------------------------------------------------- 分享／刪除
+
+    private fun uriFor(f: File) = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
 
     private fun share(f: File) {
         val intent = Intent(Intent.ACTION_SEND)
@@ -258,8 +410,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun confirmDelete(f: File) {
         AlertDialog.Builder(this)
+            .setTitle(R.string.act_delete)
             .setMessage(R.string.confirm_delete)
-            .setPositiveButton(R.string.ok) { _, _ ->
+            .setPositiveButton(R.string.act_delete) { _, _ ->
+                if (playingPath == f.absolutePath) stopPlayback()
                 f.delete()
                 loadFiles()
             }
