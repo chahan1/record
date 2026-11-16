@@ -17,6 +17,8 @@ import android.view.WindowManager
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.BaseAdapter
+import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -25,6 +27,7 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -48,7 +51,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPause: ImageButton
     private lateinit var swAuto: SwitchCompat
     private lateinit var spSource: Spinner
+    private lateinit var tvSelect: TextView
+    private lateinit var selectBar: View
+    private lateinit var btnSelDelete: Button
     private lateinit var listView: ListView
+
+    // 批次選取
+    private var selectMode = false
+    private val selected = LinkedHashSet<String>()
+    private lateinit var backCallback: OnBackPressedCallback
     private lateinit var adapter: RecAdapter
 
     private var items: List<RecItem> = emptyList()
@@ -111,6 +122,36 @@ class MainActivity : AppCompatActivity() {
 
         adapter = RecAdapter()
         listView.adapter = adapter
+
+        tvSelect = findViewById(R.id.tvSelect)
+        selectBar = findViewById(R.id.selectBar)
+        btnSelDelete = findViewById(R.id.btnSelDelete)
+
+        findViewById<TextView>(R.id.tvBackup).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        backCallback = object : OnBackPressedCallback(false) {
+            override fun handleOnBackPressed() {
+                exitSelectMode()
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, backCallback)
+
+        tvSelect.setOnClickListener {
+            if (selectMode) exitSelectMode() else enterSelectMode(null)
+        }
+        findViewById<Button>(R.id.btnSelAll).setOnClickListener { toggleSelectAll() }
+        findViewById<Button>(R.id.btnSelCancel).setOnClickListener { exitSelectMode() }
+        btnSelDelete.setOnClickListener { confirmDeleteSelected() }
+
+        listView.setOnItemClickListener { _, _, position, _ ->
+            if (selectMode) items.getOrNull(position)?.let { toggleSelected(it) }
+        }
+        listView.setOnItemLongClickListener { _, _, position, _ ->
+            if (!selectMode) items.getOrNull(position)?.let { enterSelectMode(it) }
+            true
+        }
 
         swAuto.isChecked = Prefs.autoStart(this)
         swAuto.setOnCheckedChangeListener { _, checked -> Prefs.setAutoStart(this, checked) }
@@ -275,6 +316,9 @@ class MainActivity : AppCompatActivity() {
             val built = files.map { describe(it) }
             runOnUiThread {
                 items = built
+                // 已不存在的檔案從選取中移除
+                selected.retainAll(built.map { it.file.absolutePath }.toSet())
+                updateSelectUi()
                 adapter.notifyDataSetChanged()
                 tvEmpty.visibility = if (built.isEmpty()) View.VISIBLE else View.GONE
                 tvListTitle.text =
@@ -339,6 +383,16 @@ class MainActivity : AppCompatActivity() {
             v.findViewById<TextView>(R.id.tvTitle).text = item.title
             v.findViewById<TextView>(R.id.tvMeta).text = item.meta
 
+            // 批次選取模式：顯示勾選框，隱藏單筆操作按鈕
+            val cb = v.findViewById<CheckBox>(R.id.cbSelect)
+            val actionVis = if (selectMode) View.GONE else View.VISIBLE
+            cb.visibility = if (selectMode) View.VISIBLE else View.GONE
+            cb.isChecked = selected.contains(item.file.absolutePath)
+            v.findViewById<View>(R.id.btnPlay).visibility = actionVis
+            v.findViewById<View>(R.id.btnRename).visibility = actionVis
+            v.findViewById<View>(R.id.btnShare).visibility = actionVis
+            v.findViewById<View>(R.id.btnDelete).visibility = actionVis
+
             val btnPlay = v.findViewById<ImageButton>(R.id.btnPlay)
             btnPlay.setImageResource(if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
             btnPlay.contentDescription =
@@ -350,7 +404,7 @@ class MainActivity : AppCompatActivity() {
             v.findViewById<ImageButton>(R.id.btnDelete).setOnClickListener { confirmDelete(item.file) }
 
             val panel = v.findViewById<View>(R.id.playerPanel)
-            if (isCurrent && mp != null) {
+            if (isCurrent && mp != null && !selectMode) {
                 panel.visibility = View.VISIBLE
                 val seek = v.findViewById<SeekBar>(R.id.seek)
                 val dur = mp.duration
@@ -474,6 +528,62 @@ class MainActivity : AppCompatActivity() {
             .putExtra(Intent.EXTRA_STREAM, uriFor(f))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(Intent.createChooser(intent, f.name))
+    }
+
+    // ---------------------------------------------------------------- 批次選取／刪除
+
+    private fun enterSelectMode(first: RecItem?) {
+        if (items.isEmpty()) return
+        stopPlayback()
+        selectMode = true
+        selected.clear()
+        if (first != null) selected.add(first.file.absolutePath)
+        updateSelectUi()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun exitSelectMode() {
+        selectMode = false
+        selected.clear()
+        updateSelectUi()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun toggleSelected(item: RecItem) {
+        val path = item.file.absolutePath
+        if (!selected.remove(path)) selected.add(path)
+        updateSelectUi()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun toggleSelectAll() {
+        val all = items.map { it.file.absolutePath }
+        if (selected.size == all.size) selected.clear() else selected.addAll(all)
+        updateSelectUi()
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun updateSelectUi() {
+        backCallback.isEnabled = selectMode
+        selectBar.visibility = if (selectMode) View.VISIBLE else View.GONE
+        tvSelect.setText(if (selectMode) R.string.select_done else R.string.select)
+        btnSelDelete.text = getString(R.string.sel_delete, selected.size)
+        btnSelDelete.isEnabled = selected.isNotEmpty()
+    }
+
+    private fun confirmDeleteSelected() {
+        val count = selected.size
+        if (count == 0) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.act_delete)
+            .setMessage(getString(R.string.confirm_delete_many, count))
+            .setPositiveButton(R.string.act_delete) { _, _ ->
+                selected.forEach { File(it).delete() }
+                exitSelectMode()
+                loadFiles()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     // ---------------------------------------------------------------- 重新命名

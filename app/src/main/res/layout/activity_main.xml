@@ -9,15 +9,32 @@
     android:paddingEnd="16dp"
     android:paddingBottom="8dp">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingStart="4dp"
-        android:paddingBottom="12dp"
-        android:text="@string/app_name"
-        android:textColor="@color/text"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingBottom="12dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="4dp"
+            android:text="@string/app_name"
+            android:textColor="@color/text"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvBackup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="@string/backup_link"
+            android:textColor="@color/brand"
+            android:textSize="15sp" />
+    </LinearLayout>
 
     <!-- 錄音控制卡片 -->
     <LinearLayout
@@ -127,17 +144,33 @@
     </LinearLayout>
 
     <!-- 錄音檔清單 -->
-    <TextView
-        android:id="@+id/tvListTitle"
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingStart="4dp"
-        android:paddingTop="20dp"
-        android:paddingBottom="8dp"
-        android:text="@string/list_title"
-        android:textColor="@color/text_sub"
-        android:textSize="14sp"
-        android:textStyle="bold" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingTop="12dp">
+
+        <TextView
+            android:id="@+id/tvListTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:paddingStart="4dp"
+            android:text="@string/list_title"
+            android:textColor="@color/text_sub"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvSelect"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="@string/select"
+            android:textColor="@color/brand"
+            android:textSize="15sp" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/tvEmpty"
@@ -159,4 +192,41 @@
         android:listSelector="@android:color/transparent"
         android:paddingBottom="12dp"
         android:scrollbars="none" />
+
+    <!-- 批次選取時才顯示的操作列 -->
+    <LinearLayout
+        android:id="@+id/selectBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_card"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/btnSelAll"
+            style="@style/Widget.AppCompat.Button.Borderless.Colored"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/sel_all" />
+
+        <Button
+            android:id="@+id/btnSelDelete"
+            style="@style/Widget.AppCompat.Button.Borderless.Colored"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/act_delete"
+            android:textColor="@color/danger" />
+
+        <Button
+            android:id="@+id/btnSelCancel"
+            style="@style/Widget.AppCompat.Button.Borderless.Colored"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/sel_cancel" />
+    </LinearLayout>
 </LinearLayout>

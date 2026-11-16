@@ -10,6 +10,11 @@ object Prefs {
     private const val FILE = "record_prefs"
     private const val KEY_AUTO_START = "auto_start"
     private const val KEY_SOURCE = "source"
+    private const val KEY_SCRIPT_URL = "script_url"
+    private const val KEY_SCRIPT_KEY = "script_key"
+    private const val KEY_AUTO_BACKUP = "auto_backup"
+    private const val KEY_WIFI_ONLY = "wifi_only"
+    private const val KEY_LAST_BACKUP = "last_backup"
 
     private fun sp(ctx: Context) = ctx.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
@@ -25,5 +30,32 @@ object Prefs {
 
     fun setSource(ctx: Context, value: Int) {
         sp(ctx).edit().putInt(KEY_SOURCE, value).apply()
+    }
+
+    // ---- Google Drive 備份（Apps Script 中繼站）
+
+    fun scriptUrl(ctx: Context): String = sp(ctx).getString(KEY_SCRIPT_URL, "") ?: ""
+    fun scriptKey(ctx: Context): String = sp(ctx).getString(KEY_SCRIPT_KEY, "") ?: ""
+
+    fun setScript(ctx: Context, url: String, key: String) {
+        sp(ctx).edit().putString(KEY_SCRIPT_URL, url.trim()).putString(KEY_SCRIPT_KEY, key.trim()).apply()
+    }
+
+    fun autoBackup(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_AUTO_BACKUP, false)
+
+    fun setAutoBackup(ctx: Context, value: Boolean) {
+        sp(ctx).edit().putBoolean(KEY_AUTO_BACKUP, value).apply()
+    }
+
+    fun wifiOnly(ctx: Context): Boolean = sp(ctx).getBoolean(KEY_WIFI_ONLY, true)
+
+    fun setWifiOnly(ctx: Context, value: Boolean) {
+        sp(ctx).edit().putBoolean(KEY_WIFI_ONLY, value).apply()
+    }
+
+    fun lastBackup(ctx: Context): String = sp(ctx).getString(KEY_LAST_BACKUP, "") ?: ""
+
+    fun setLastBackup(ctx: Context, text: String) {
+        sp(ctx).edit().putString(KEY_LAST_BACKUP, text).apply()
     }
 }

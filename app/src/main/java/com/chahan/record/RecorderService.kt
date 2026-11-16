@@ -243,8 +243,23 @@ class RecorderService : Service() {
 
     private fun stopRecording() {
         finishRecorder(deleteIfTooShort = true)
+        maybeAutoBackup()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /** 錄音結束後，如果有開啟自動備份就啟動備份服務 */
+    private fun maybeAutoBackup() {
+        if (!Prefs.autoBackup(this)) return
+        if (Prefs.scriptUrl(this).isBlank() || Prefs.scriptKey(this).isBlank()) return
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(
+                this,
+                Intent(this, BackupService::class.java).putExtra(BackupService.EXTRA_MANUAL, false)
+            )
+        } catch (e: Exception) {
+            // 無法啟動備份不影響錄音
+        }
     }
 
     private fun finishRecorder(deleteIfTooShort: Boolean) {
