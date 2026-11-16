@@ -38,6 +38,10 @@ jobs:
         run: |
           cp app/build/outputs/apk/release/app-release.apk record.apk
           gh release delete latest --cleanup-tag --yes || true
+          sleep 5
           gh release create latest record.apk \
+            --target "${{ github.sha }}" \
             --title "最新版 APK" \
             --notes "自動編譯：${{ github.sha }}"
+          # 確保是正式發布（不是草稿），否則下載連結會是 404
+          gh release edit latest --draft=false
