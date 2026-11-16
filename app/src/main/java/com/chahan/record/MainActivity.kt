@@ -6,16 +6,23 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.BaseAdapter
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ListView
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRecord: ImageButton
     private lateinit var btnPause: ImageButton
     private lateinit var swAuto: SwitchCompat
+    private lateinit var spSource: Spinner
     private lateinit var listView: ListView
     private lateinit var adapter: RecAdapter
 
@@ -59,6 +67,24 @@ class MainActivity : AppCompatActivity() {
                 startRecording()
             } else {
                 Toast.makeText(this, R.string.need_mic, Toast.LENGTH_LONG).show()
+            }
+        }
+
+    // 錄其他 App 的聲音：先取得系統的錄製授權（每次錄音都要同意一次）
+    private val projectionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            if (result.resultCode == RESULT_OK && data != null) {
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, RecorderService::class.java)
+                        .setAction(RecorderService.ACTION_START)
+                        .putExtra(RecorderService.EXTRA_SOURCE, Prefs.source(this))
+                        .putExtra(RecorderService.EXTRA_RESULT_CODE, result.resultCode)
+                        .putExtra(RecorderService.EXTRA_RESULT_DATA, data)
+                )
+            } else {
+                Toast.makeText(this, R.string.need_projection, Toast.LENGTH_LONG).show()
             }
         }
 
@@ -88,6 +114,27 @@ class MainActivity : AppCompatActivity() {
 
         swAuto.isChecked = Prefs.autoStart(this)
         swAuto.setOnCheckedChangeListener { _, checked -> Prefs.setAutoStart(this, checked) }
+
+        spSource = findViewById(R.id.spSource)
+        val sourceAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf(
+                getString(R.string.src_mic),
+                getString(R.string.src_internal),
+                getString(R.string.src_mix)
+            )
+        )
+        sourceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spSource.adapter = sourceAdapter
+        spSource.setSelection(Prefs.source(this))
+        spSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                Prefs.setSource(this@MainActivity, position)
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
 
         btnRecord.setOnClickListener {
             if (RecorderService.state == RecState.IDLE) {
@@ -150,10 +197,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun startRecording() {
         stopPlayback()
-        ContextCompat.startForegroundService(
-            this,
-            Intent(this, RecorderService::class.java).setAction(RecorderService.ACTION_START)
-        )
+        val source = Prefs.source(this)
+        if (source == Prefs.SRC_MIC) {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, RecorderService::class.java)
+                    .setAction(RecorderService.ACTION_START)
+                    .putExtra(RecorderService.EXTRA_SOURCE, Prefs.SRC_MIC)
+            )
+        } else {
+            val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projectionLauncher.launch(mpm.createScreenCaptureIntent())
+        }
     }
 
     private fun sendToService(action: String) {
@@ -170,6 +225,7 @@ class MainActivity : AppCompatActivity() {
         btnRecord.contentDescription =
             getString(if (s == RecState.IDLE) R.string.btn_start else R.string.btn_stop)
 
+        spSource.isEnabled = s == RecState.IDLE
         btnPause.visibility = if (s == RecState.IDLE) View.INVISIBLE else View.VISIBLE
         btnPause.setImageResource(if (s == RecState.PAUSED) R.drawable.ic_play else R.drawable.ic_pause)
         btnPause.contentDescription =
@@ -215,7 +271,7 @@ class MainActivity : AppCompatActivity() {
             val current = RecorderService.currentPath
             val files = (dir.listFiles { f -> f.extension == "m4a" && f.absolutePath != current }
                 ?: emptyArray())
-                .sortedByDescending { it.name }
+                .sortedByDescending { it.lastModified() }
             val built = files.map { describe(it) }
             runOnUiThread {
                 items = built
@@ -228,14 +284,24 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
+    private fun isDefaultName(base: String) = Regex("rec_\\d{8}_\\d{6}").matches(base)
+
     private fun describe(f: File): RecItem {
+        val base = f.nameWithoutExtension
+        val defaultName = isDefaultName(base)
         val start = try {
-            val stamp = f.nameWithoutExtension.removePrefix("rec_")
-            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(stamp) ?: Date(f.lastModified())
+            if (defaultName) {
+                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(base.removePrefix("rec_"))
+                    ?: Date(f.lastModified())
+            } else {
+                Date(f.lastModified())
+            }
         } catch (e: Exception) {
             Date(f.lastModified())
         }
-        val title = SimpleDateFormat("MM/dd  HH:mm", Locale.US).format(start)
+        val dateText = SimpleDateFormat("MM/dd  HH:mm", Locale.US).format(start)
+        // 預設名稱顯示日期時間；改過名稱就顯示自訂名稱，日期放到下一行
+        val title = if (defaultName) dateText else base
 
         var durText = "--:--"
         val mmr = MediaMetadataRetriever()
@@ -254,7 +320,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val sizeText = String.format(Locale.US, "%.1f MB", f.length() / 1024.0 / 1024.0)
-        return RecItem(f, title, "$durText  ·  $sizeText")
+        val meta = if (defaultName) "$durText  ·  $sizeText" else "$dateText  ·  $durText  ·  $sizeText"
+        return RecItem(f, title, meta)
     }
 
     private inner class RecAdapter : BaseAdapter() {
@@ -278,6 +345,7 @@ class MainActivity : AppCompatActivity() {
                 getString(if (isPlaying) R.string.btn_pause else R.string.act_play)
             btnPlay.setOnClickListener { togglePlay(item) }
 
+            v.findViewById<ImageButton>(R.id.btnRename).setOnClickListener { showRename(item.file) }
             v.findViewById<ImageButton>(R.id.btnShare).setOnClickListener { share(item.file) }
             v.findViewById<ImageButton>(R.id.btnDelete).setOnClickListener { confirmDelete(item.file) }
 
@@ -406,6 +474,54 @@ class MainActivity : AppCompatActivity() {
             .putExtra(Intent.EXTRA_STREAM, uriFor(f))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         startActivity(Intent.createChooser(intent, f.name))
+    }
+
+    // ---------------------------------------------------------------- 重新命名
+
+    private fun showRename(f: File) {
+        val base = f.nameWithoutExtension
+        val input = EditText(this)
+        input.setSingleLine()
+        input.hint = getString(R.string.rename_hint)
+        input.setText(if (isDefaultName(base)) "" else base)
+        input.setSelection(input.text.length)
+
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val box = FrameLayout(this)
+        box.setPadding(pad, pad / 2, pad, 0)
+        box.addView(input)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.act_rename)
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ -> doRename(f, input.text.toString()) }
+            .setNegativeButton(R.string.cancel, null)
+            .create()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
+        dialog.show()
+        input.requestFocus()
+    }
+
+    private fun doRename(f: File, raw: String) {
+        // 移除檔名不能用的字元，最多 60 字
+        val clean = raw.replace(Regex("[\\\\/:*?\"<>|\\r\\n]"), " ").trim().take(60)
+        if (clean.isEmpty()) return
+
+        val dir = f.parentFile ?: return
+        var target = File(dir, "$clean.m4a")
+        if (target.absolutePath == f.absolutePath) return
+        if (target.exists()) {
+            var i = 2
+            while (File(dir, "$clean ($i).m4a").exists()) i++
+            target = File(dir, "$clean ($i).m4a")
+        }
+
+        if (playingPath == f.absolutePath) stopPlayback()
+        if (f.renameTo(target)) {
+            loadFiles()
+        } else {
+            Toast.makeText(this, R.string.rename_failed, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun confirmDelete(f: File) {

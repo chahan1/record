@@ -9,8 +9,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.media.MediaRecorder
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.widget.Toast
@@ -24,7 +28,9 @@ import java.util.Locale
 enum class RecState { IDLE, RECORDING, PAUSED }
 
 /**
- * 前景服務：用麥克風錄音，輸出 AAC（.m4a）。
+ * 前景服務：錄音並輸出 AAC（.m4a）。
+ * - 麥克風：MediaRecorder
+ * - 其他 App 的聲音（可混入麥克風）：PlaybackCaptureRecorder
  * 螢幕關閉或切到別的 App 時仍會持續錄音。
  */
 class RecorderService : Service() {
@@ -33,6 +39,10 @@ class RecorderService : Service() {
         const val ACTION_START = "com.chahan.record.START"
         const val ACTION_STOP = "com.chahan.record.STOP"
         const val ACTION_TOGGLE_PAUSE = "com.chahan.record.TOGGLE_PAUSE"
+
+        const val EXTRA_SOURCE = "source"
+        const val EXTRA_RESULT_CODE = "result_code"
+        const val EXTRA_RESULT_DATA = "result_data"
 
         private const val CHANNEL_ID = "recording"
         private const val NOTIF_ID = 1
@@ -66,7 +76,10 @@ class RecorderService : Service() {
     }
 
     private var recorder: MediaRecorder? = null
+    private var pcm: PlaybackCaptureRecorder? = null
+    private var projection: MediaProjection? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -83,7 +96,7 @@ class RecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startRecording()
+            ACTION_START -> startRecording(intent)
             ACTION_STOP -> stopRecording()
             ACTION_TOGGLE_PAUSE -> togglePause()
             else -> if (state == RecState.IDLE) stopSelf()
@@ -100,17 +113,21 @@ class RecorderService : Service() {
 
     // ---------------------------------------------------------------- 開始
 
-    private fun startRecording() {
+    private fun startRecording(intent: Intent) {
         if (state != RecState.IDLE) return
 
-        // Android 14：必須在 5 秒內以 microphone 類型進入前景
+        val source = intent.getIntExtra(EXTRA_SOURCE, Prefs.SRC_MIC)
+        val fgType = when (source) {
+            Prefs.SRC_INTERNAL -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            Prefs.SRC_MIX ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+
+        // Android 14：必須在 5 秒內進入前景，且類型要與實際用途一致
         try {
-            ServiceCompat.startForeground(
-                this,
-                NOTIF_ID,
-                buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
+            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(), fgType)
         } catch (e: Exception) {
             failAndStop()
             return
@@ -121,24 +138,14 @@ class RecorderService : Service() {
         val file = File(recordingsDir(this), name)
 
         try {
-            val r = if (Build.VERSION.SDK_INT >= 31) {
-                MediaRecorder(this)
+            if (source == Prefs.SRC_MIC) {
+                startMicRecorder(file)
             } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
+                startPlaybackCapture(intent, file, withMic = source == Prefs.SRC_MIX)
             }
-            recorder = r
-            r.setAudioSource(MediaRecorder.AudioSource.MIC)
-            r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            r.setAudioChannels(1)
-            r.setAudioSamplingRate(44100)
-            r.setAudioEncodingBitRate(96000)
-            r.setOutputFile(file.absolutePath)
-            r.prepare()
-            r.start()
         } catch (e: Exception) {
             releaseRecorderQuietly()
+            stopProjectionQuietly()
             file.delete()
             failAndStop()
             return
@@ -153,23 +160,78 @@ class RecorderService : Service() {
         notifyState()
     }
 
+    private fun startMicRecorder(file: File) {
+        val r = if (Build.VERSION.SDK_INT >= 31) {
+            MediaRecorder(this)
+        } else {
+            @Suppress("DEPRECATION")
+            MediaRecorder()
+        }
+        recorder = r
+        r.setAudioSource(MediaRecorder.AudioSource.MIC)
+        r.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+        r.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+        r.setAudioChannels(1)
+        r.setAudioSamplingRate(44100)
+        r.setAudioEncodingBitRate(96000)
+        r.setOutputFile(file.absolutePath)
+        r.prepare()
+        r.start()
+    }
+
+    private fun startPlaybackCapture(intent: Intent, file: File, withMic: Boolean) {
+        val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
+        @Suppress("DEPRECATION")
+        val data = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
+            ?: throw IllegalStateException("no projection permission")
+
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val proj = mpm.getMediaProjection(code, data)
+        projection = proj
+
+        // Android 14 要求在使用前先註冊回呼；使用者從系統列停止分享時也會進來
+        proj.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                mainHandler.post { if (state != RecState.IDLE) stopRecording() }
+            }
+        }, mainHandler)
+
+        val p = PlaybackCaptureRecorder(proj, withMic, file) {
+            mainHandler.post { if (state != RecState.IDLE) stopRecording() }
+        }
+        pcm = p
+        p.start()
+    }
+
     // ---------------------------------------------------------------- 暫停／繼續
 
     private fun togglePause() {
-        val r = recorder ?: return
+        if (state != RecState.RECORDING && state != RecState.PAUSED) return
+        val p = pcm
+        val r = recorder
         try {
-            when (state) {
-                RecState.RECORDING -> {
+            if (p != null) {
+                if (state == RecState.RECORDING) {
+                    p.paused = true
+                    accumulated = elapsedMs()
+                    state = RecState.PAUSED
+                } else {
+                    p.paused = false
+                    segmentStart = SystemClock.elapsedRealtime()
+                    state = RecState.RECORDING
+                }
+            } else if (r != null) {
+                if (state == RecState.RECORDING) {
                     r.pause()
                     accumulated = elapsedMs()
                     state = RecState.PAUSED
-                }
-                RecState.PAUSED -> {
+                } else {
                     r.resume()
                     segmentStart = SystemClock.elapsedRealtime()
                     state = RecState.RECORDING
                 }
-                else -> return
+            } else {
+                return
             }
         } catch (e: Exception) {
             return
@@ -187,6 +249,14 @@ class RecorderService : Service() {
 
     private fun finishRecorder(deleteIfTooShort: Boolean) {
         val path = currentPath
+
+        val p = pcm
+        if (p != null) {
+            p.stop()
+            pcm = null
+        }
+        stopProjectionQuietly()
+
         val r = recorder
         if (r != null) {
             try {
@@ -208,6 +278,15 @@ class RecorderService : Service() {
         releaseWakeLock()
     }
 
+    private fun stopProjectionQuietly() {
+        try {
+            projection?.stop()
+        } catch (e: Exception) {
+            // ignore
+        }
+        projection = null
+    }
+
     private fun releaseRecorderQuietly() {
         try {
             recorder?.release()
@@ -215,6 +294,7 @@ class RecorderService : Service() {
             // ignore
         }
         recorder = null
+        pcm = null
     }
 
     private fun failAndStop() {

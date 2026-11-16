@@ -18,6 +18,14 @@
     <string name="act_play">播放</string>
     <string name="act_share">分享</string>
     <string name="act_delete">刪除</string>
+    <string name="act_rename">重新命名</string>
+    <string name="rename_hint">輸入名稱，例如：英文課 第3週</string>
+    <string name="rename_failed">改名失敗</string>
+    <string name="source_title">錄音來源</string>
+    <string name="src_mic">麥克風（當面說話）</string>
+    <string name="src_internal">其他 App 的聲音</string>
+    <string name="src_mix">其他 App 的聲音 ＋ 麥克風</string>
+    <string name="need_projection">需要同意系統的錄製授權，才能錄其他 App 的聲音</string>
     <string name="act_stop_short">停止</string>
     <string name="confirm_delete">確定刪除這個錄音？</string>
     <string name="ok">確定</string>
