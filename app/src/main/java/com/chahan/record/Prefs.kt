@@ -10,6 +10,7 @@ object Prefs {
     private const val FILE = "record_prefs"
     private const val KEY_AUTO_START = "auto_start"
     private const val KEY_SOURCE = "source"
+    private const val KEY_SEGMENT = "segment_minutes"
     private const val KEY_SCRIPT_URL = "script_url"
     private const val KEY_SCRIPT_KEY = "script_key"
     private const val KEY_AUTO_BACKUP = "auto_backup"
@@ -30,6 +31,13 @@ object Prefs {
 
     fun setSource(ctx: Context, value: Int) {
         sp(ctx).edit().putInt(KEY_SOURCE, value).apply()
+    }
+
+    /** 分段錄音：每隔幾分鐘切成一個檔案，0 表示不分段 */
+    fun segmentMinutes(ctx: Context): Int = sp(ctx).getInt(KEY_SEGMENT, 0)
+
+    fun setSegmentMinutes(ctx: Context, value: Int) {
+        sp(ctx).edit().putInt(KEY_SEGMENT, value).apply()
     }
 
     // ---- Google Drive 備份（Apps Script 中繼站）

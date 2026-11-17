@@ -51,6 +51,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPause: ImageButton
     private lateinit var swAuto: SwitchCompat
     private lateinit var spSource: Spinner
+    private lateinit var spSegment: Spinner
+    private var lastSegment = 0
     private lateinit var tvSelect: TextView
     private lateinit var selectBar: View
     private lateinit var btnSelDelete: Button
@@ -168,6 +170,31 @@ class MainActivity : AppCompatActivity() {
         )
         sourceAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spSource.adapter = sourceAdapter
+
+        // 分段錄音：每隔幾分鐘切成一個檔案
+        val segmentMinutes = listOf(0, 15, 30, 60)
+        spSegment = findViewById(R.id.spSegment)
+        val segmentAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            listOf(
+                getString(R.string.seg_off),
+                getString(R.string.seg_15),
+                getString(R.string.seg_30),
+                getString(R.string.seg_60)
+            )
+        )
+        segmentAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        spSegment.adapter = segmentAdapter
+        spSegment.setSelection(maxOf(0, segmentMinutes.indexOf(Prefs.segmentMinutes(this))))
+        spSegment.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                Prefs.setSegmentMinutes(this@MainActivity, segmentMinutes[position])
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
         spSource.setSelection(Prefs.source(this))
         spSource.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -267,18 +294,30 @@ class MainActivity : AppCompatActivity() {
             getString(if (s == RecState.IDLE) R.string.btn_start else R.string.btn_stop)
 
         spSource.isEnabled = s == RecState.IDLE
+        spSegment.isEnabled = s == RecState.IDLE
         btnPause.visibility = if (s == RecState.IDLE) View.INVISIBLE else View.VISIBLE
         btnPause.setImageResource(if (s == RecState.PAUSED) R.drawable.ic_play else R.drawable.ic_pause)
         btnPause.contentDescription =
             getString(if (s == RecState.PAUSED) R.string.btn_resume else R.string.btn_pause)
 
-        tvStatus.setText(
-            when (s) {
-                RecState.IDLE -> R.string.status_idle
-                RecState.RECORDING -> R.string.status_recording
-                RecState.PAUSED -> R.string.status_paused
+        val statusRes = when (s) {
+            RecState.IDLE -> R.string.status_idle
+            RecState.RECORDING -> R.string.status_recording
+            RecState.PAUSED -> R.string.status_paused
+        }
+        val seg = RecorderService.segment
+        tvStatus.text = getString(statusRes) +
+            if (s != RecState.IDLE && RecorderService.segmentsEnabled && seg > 0) {
+                getString(R.string.segment_suffix, seg)
+            } else {
+                ""
             }
-        )
+
+        // 換到下一段時，上一段已完成，刷新清單
+        if (seg != lastSegment) {
+            lastSegment = seg
+            if (seg > 1) loadFiles()
+        }
         tvStatus.setTextColor(
             ContextCompat.getColor(this, if (s == RecState.IDLE) R.color.text_sub else R.color.brand)
         )
@@ -328,14 +367,19 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun isDefaultName(base: String) = Regex("rec_\\d{8}_\\d{6}").matches(base)
+    // 預設檔名：rec_日期_時間，分段錄音會多一個 _p01、_p02…
+    private val defaultNameRegex = Regex("rec_(\\d{8}_\\d{6})(?:_p(\\d+))?")
+
+    private fun isDefaultName(base: String) = defaultNameRegex.matches(base)
 
     private fun describe(f: File): RecItem {
         val base = f.nameWithoutExtension
-        val defaultName = isDefaultName(base)
+        val match = defaultNameRegex.matchEntire(base)
+        val defaultName = match != null
+        val partNo = match?.groupValues?.getOrNull(2)?.toIntOrNull()
         val start = try {
-            if (defaultName) {
-                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(base.removePrefix("rec_"))
+            if (match != null) {
+                SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(match.groupValues[1])
                     ?: Date(f.lastModified())
             } else {
                 Date(f.lastModified())
@@ -344,8 +388,12 @@ class MainActivity : AppCompatActivity() {
             Date(f.lastModified())
         }
         val dateText = SimpleDateFormat("MM/dd  HH:mm", Locale.US).format(start)
-        // 預設名稱顯示日期時間；改過名稱就顯示自訂名稱，日期放到下一行
-        val title = if (defaultName) dateText else base
+        // 預設名稱顯示日期時間（分段的加上第幾段）；改過名稱就顯示自訂名稱，日期放到下一行
+        val title = if (defaultName) {
+            dateText + if (partNo != null) getString(R.string.segment_suffix, partNo) else ""
+        } else {
+            base
+        }
 
         var durText = "--:--"
         val mmr = MediaMetadataRetriever()

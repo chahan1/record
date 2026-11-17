@@ -20,6 +20,7 @@ import android.os.SystemClock
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -31,6 +32,7 @@ enum class RecState { IDLE, RECORDING, PAUSED }
  * 前景服務：錄音並輸出 AAC（.m4a）。
  * - 麥克風：MediaRecorder
  * - 其他 App 的聲音（可混入麥克風）：PlaybackCaptureRecorder
+ * - 分段錄音：每隔固定時間結束目前檔案、接著錄下一個檔案
  * 螢幕關閉或切到別的 App 時仍會持續錄音。
  */
 class RecorderService : Service() {
@@ -53,6 +55,13 @@ class RecorderService : Service() {
         /** 正在寫入的檔案路徑（清單中會略過） */
         @Volatile
         var currentPath: String? = null
+
+        /** 目前是第幾段（只有開啟分段時才有意義） */
+        @Volatile
+        var segment: Int = 0
+
+        @Volatile
+        var segmentsEnabled: Boolean = false
 
         @Volatile
         private var segmentStart = 0L
@@ -80,6 +89,27 @@ class RecorderService : Service() {
     private var projection: MediaProjection? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // 分段錄音
+    private var sessionStamp = ""
+    private var segmentIndex = 1
+    private var segmentLimitMs = 0L
+    private var segmentStartTotal = 0L
+    private var usingPcm = false
+    private var pcmWithMic = false
+
+    private val segmentTick = object : Runnable {
+        override fun run() {
+            if (state == RecState.IDLE) return
+            if (state == RecState.RECORDING &&
+                segmentLimitMs > 0 &&
+                elapsedMs() - segmentStartTotal >= segmentLimitMs
+            ) {
+                rotateSegment()
+            }
+            if (state != RecState.IDLE) mainHandler.postDelayed(this, 1000)
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -113,6 +143,15 @@ class RecorderService : Service() {
 
     // ---------------------------------------------------------------- 開始
 
+    private fun newSegmentFile(): File {
+        val name = if (segmentLimitMs > 0) {
+            String.format(Locale.US, "rec_%s_p%02d.m4a", sessionStamp, segmentIndex)
+        } else {
+            "rec_$sessionStamp.m4a"
+        }
+        return File(recordingsDir(this), name)
+    }
+
     private fun startRecording(intent: Intent) {
         if (state != RecState.IDLE) return
 
@@ -133,15 +172,20 @@ class RecorderService : Service() {
             return
         }
 
-        val name = "rec_" +
-            SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".m4a"
-        val file = File(recordingsDir(this), name)
+        sessionStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        segmentLimitMs = Prefs.segmentMinutes(this) * 60_000L
+        segmentIndex = 1
+        segmentStartTotal = 0L
+        usingPcm = source != Prefs.SRC_MIC
+        pcmWithMic = source == Prefs.SRC_MIX
+        val file = newSegmentFile()
 
         try {
-            if (source == Prefs.SRC_MIC) {
-                startMicRecorder(file)
+            if (usingPcm) {
+                setupProjection(intent)
+                startPcm(file)
             } else {
-                startPlaybackCapture(intent, file, withMic = source == Prefs.SRC_MIX)
+                startMicRecorder(file)
             }
         } catch (e: Exception) {
             releaseRecorderQuietly()
@@ -155,9 +199,14 @@ class RecorderService : Service() {
         accumulated = 0L
         segmentStart = SystemClock.elapsedRealtime()
         state = RecState.RECORDING
+        segment = 1
+        segmentsEnabled = segmentLimitMs > 0
 
         acquireWakeLock()
         notifyState()
+
+        mainHandler.removeCallbacks(segmentTick)
+        if (segmentsEnabled) mainHandler.postDelayed(segmentTick, 1000)
     }
 
     private fun startMicRecorder(file: File) {
@@ -179,7 +228,8 @@ class RecorderService : Service() {
         r.start()
     }
 
-    private fun startPlaybackCapture(intent: Intent, file: File, withMic: Boolean) {
+    /** 取得錄製授權產生的 MediaProjection（整個錄音期間只建立一次） */
+    private fun setupProjection(intent: Intent) {
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
         @Suppress("DEPRECATION")
         val data = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
@@ -195,12 +245,64 @@ class RecorderService : Service() {
                 mainHandler.post { if (state != RecState.IDLE) stopRecording() }
             }
         }, mainHandler)
+    }
 
-        val p = PlaybackCaptureRecorder(proj, withMic, file) {
+    private fun startPcm(file: File) {
+        val proj = projection ?: throw IllegalStateException("no projection")
+        val p = PlaybackCaptureRecorder(proj, pcmWithMic, file) {
             mainHandler.post { if (state != RecState.IDLE) stopRecording() }
         }
         pcm = p
         p.start()
+    }
+
+    // ---------------------------------------------------------------- 分段
+
+    /** 結束目前這一段，立刻接著錄下一段 */
+    private fun rotateSegment() {
+        closeCurrentSegment()
+
+        segmentIndex++
+        segmentStartTotal = elapsedMs()
+        val file = newSegmentFile()
+        try {
+            if (usingPcm) startPcm(file) else startMicRecorder(file)
+        } catch (e: Exception) {
+            // 接不上下一段就結束整個錄音，已錄的段落都會保留
+            releaseRecorderQuietly()
+            file.delete()
+            stopRecording()
+            return
+        }
+        currentPath = file.absolutePath
+        segment = segmentIndex
+        notifyState()
+
+        // 剛結束的那一段可以先備份
+        maybeAutoBackup()
+    }
+
+    /** 收尾目前這一段的錄音檔，但不結束整個錄音 */
+    private fun closeCurrentSegment() {
+        val p = pcm
+        if (p != null) {
+            p.stop()
+            pcm = null
+        }
+        val r = recorder
+        if (r != null) {
+            try {
+                r.stop()
+            } catch (e: RuntimeException) {
+                // 保留檔案，不在這裡刪除
+            }
+            try {
+                r.release()
+            } catch (e: Exception) {
+                // ignore
+            }
+            recorder = null
+        }
     }
 
     // ---------------------------------------------------------------- 暫停／繼續
@@ -248,12 +350,12 @@ class RecorderService : Service() {
         stopSelf()
     }
 
-    /** 錄音結束後，如果有開啟自動備份就啟動備份服務 */
+    /** 錄音結束（或一段結束）後，如果有開啟自動備份就啟動備份服務 */
     private fun maybeAutoBackup() {
         if (!Prefs.autoBackup(this)) return
         if (Prefs.scriptUrl(this).isBlank() || Prefs.scriptKey(this).isBlank()) return
         try {
-            androidx.core.content.ContextCompat.startForegroundService(
+            ContextCompat.startForegroundService(
                 this,
                 Intent(this, BackupService::class.java).putExtra(BackupService.EXTRA_MANUAL, false)
             )
@@ -263,6 +365,7 @@ class RecorderService : Service() {
     }
 
     private fun finishRecorder(deleteIfTooShort: Boolean) {
+        mainHandler.removeCallbacks(segmentTick)
         val path = currentPath
 
         val p = pcm
@@ -289,6 +392,8 @@ class RecorderService : Service() {
         recorder = null
         currentPath = null
         accumulated = 0L
+        segment = 0
+        segmentsEnabled = false
         state = RecState.IDLE
         releaseWakeLock()
     }
@@ -313,8 +418,11 @@ class RecorderService : Service() {
     }
 
     private fun failAndStop() {
+        mainHandler.removeCallbacks(segmentTick)
         state = RecState.IDLE
         currentPath = null
+        segment = 0
+        segmentsEnabled = false
         Toast.makeText(this, R.string.record_failed, Toast.LENGTH_LONG).show()
         try {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
@@ -367,9 +475,11 @@ class RecorderService : Service() {
             },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val title = getString(if (paused) R.string.notif_paused else R.string.notif_recording) +
+            if (segmentsEnabled && segment > 0) getString(R.string.segment_suffix, segment) else ""
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(if (paused) R.string.notif_paused else R.string.notif_recording))
+            .setContentTitle(title)
             .setContentText(getString(R.string.notif_text))
             .setContentIntent(open)
             .setOngoing(true)

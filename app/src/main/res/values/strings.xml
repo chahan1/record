@@ -18,6 +18,12 @@
     <string name="act_play">播放</string>
     <string name="act_share">分享</string>
     <string name="act_delete">刪除</string>
+    <string name="segment_title">分段錄音</string>
+    <string name="seg_off">不分段</string>
+    <string name="seg_15">每 15 分鐘</string>
+    <string name="seg_30">每 30 分鐘</string>
+    <string name="seg_60">每 60 分鐘</string>
+    <string name="segment_suffix">" · 第 %1$d 段"</string>
     <string name="backup_link">雲端備份 ›</string>
     <string name="select">選取</string>
     <string name="select_done">完成</string>
