@@ -4,7 +4,7 @@
 // 手機拿到權杖後直接上傳到你的 Drive，權杖過期時會自動再來這裡索取。
 
 // ★ 把下面這行改成你自己的密碼（英文數字，越長越好），並把同一個密碼填進 App
-const KEY = 'laes23632077';
+const KEY = '請改成你自己的密碼';
 
 function doGet(e) {
   const given = (e && e.parameter && e.parameter.key) || '';
